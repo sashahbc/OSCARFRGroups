@@ -1,6 +1,3 @@
-using FRGroups
-using Test
+using FRGroups, Oscar, Test
 
-@testset "FRGroups.jl" begin
-    # Write your tests here.
-end
+include("p1points.jl")

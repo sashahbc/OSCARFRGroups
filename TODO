@@ -1,0 +1,10 @@
+1) triangulations. make them robust, with incircle tests and refinement
+
+2) sphere groups, possibly with orbifold
+
+3) marked triangulations
+
+4) rational maps, recorded by critical points and values (rather than coefficients), and normalization. (in degree 1, misses 3 params; in degree 2, misses 1 param. in degree >=3, probably ok).
+- conversion to classical format
+- equations that enforce the points to be consistent
+- compute preimages of points in this model, test intersection between curve (arc of great circle) and curve.
