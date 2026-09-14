@@ -1,6 +1,6 @@
 module FRGroups
 
-using GAP, Oscar, Buchi
+using GAP, Oscar, Buchi, NonlinearSolve
 
 export FRGroup, fr_group, mealy_machine
 
@@ -9,11 +9,6 @@ function __init__()
 
     GAP.Globals.Read(GapObj("$(@__DIR__)/../gap/buchi.gd")) # add new julia automata to FR
     GAP.Globals.Read(GapObj("$(@__DIR__)/../gap/buchi.gi"))
-
-    global ℂ, ℂ⁽ᶻ⁾, 𝓏
-    ℂ = QQBarField()
-    ℂ⁽ᶻ⁾, z = rational_function_field(ℂ,:z)
-    𝓏 = p1_map(z)
 end
 
 # ... add a bunch of Julia methods that allow direct creation, in Julia syntax, of FRGroups etc.

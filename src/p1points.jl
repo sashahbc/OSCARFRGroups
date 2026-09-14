@@ -1,11 +1,15 @@
 ################################################################
 # points on the sphere
 
-export P1Point, P1Inf, P1zero, P1one, ≎, P1Point_R3, R3_P1Point
-export distance, antipode, barycentre, midpoint, x_ratio, circumcircle
+export P1Point, P1Inf, P1zero, P1one, proj_equiv, P1Point_R3, R3_P1Point
+export distance, antipode, barycentre, midpoint, x_ratio, cross_ratio, circumcircle
+export cleaned_p1point, collected_p1_points, match_p1_points, closest_p1_point
 
-export p1_map, moebius_map, p1_path, ℂ, ℂ⁽ᶻ⁾, 𝓏
+export p1_map, moebius_map, moebius_path
 export preimages, critical_points, periodic_points, fixed_points, image_df
+export rotating_moebius_map, normalizing_moebius_map, p1_intersect
+export p1_map_by_coefficients, coefficients_of_p1_map, p1_monomial, sl2_p1_map
+export cleaned_p1map, p1_map_scaling
 
 frexp_2(x::Complex) = max(frexp(real(x))[2],frexp(imag(x))[2])
 frexp_2(x::AcbFieldElem) = max(x.real_mid_exp,x.imag_mid_exp)
@@ -13,10 +17,10 @@ frexp_2(x::QQBarFieldElem) = 1 # no scaling required
 Base.ldexp(x::Complex,i) = typeof(x)(ldexp(real(x),i),ldexp(imag(x),i))
 Base.ldexp(x::QQBarFieldElem,i) = x*2^i
 Base.abs2(x::AcbFieldElem)::ArbFieldElem = real(x)*real(x)+imag(x)*imag(x)
-≎(x,y) = x ≈ y # default
-≎(x::Union{ArbFieldElem,AcbFieldElem},y::Union{ArbFieldElem,AcbFieldElem}) = overlaps(x,y)
-≎(x::Tuple,y::Tuple...) = all(splat(≎),zip(x,y...))
-≎(x::AbstractVector,y::AbstractVector...) = all(splat(≎),zip(x,y...))
+proj_equiv(x,y) = x ≈ y # default
+proj_equiv(x::Union{ArbFieldElem,AcbFieldElem},y::Union{ArbFieldElem,AcbFieldElem}) = overlaps(x,y)
+proj_equiv(x::Tuple,y::Tuple...) = all(splat(proj_equiv),zip(x,y...))
+proj_equiv(x::AbstractVector,y::AbstractVector...) = all(splat(proj_equiv),zip(x,y...))
 
 # P1 points over type T, represented as quotients num/denom
 # with the convention that either |num|<=1 and denom=1, or num=1 and |denom|<=1
@@ -79,12 +83,16 @@ function Base.show(io::IO,z::P1Point)
 end
 
 Base.:(==)(z::P1Point,w::P1Point) = z.num*w.den == z.den*w.num
-≎(z::P1Point,w::P1Point) = z.num*w.den ≎ z.den*w.num
+proj_equiv(z::P1Point,w::P1Point) = proj_equiv(z.num*w.den, z.den*w.num)
 Base.hash(z::P1Point,h) = hash(z.num,hash(z.den,h))
 
 function P1Point_R3(v::NTuple{3,T}) where T
     U = complex_field(v[1])
-    P1Point(U(v[1],v[2]),U(sqrt(v[1]*v[1]+v[2]*v[2]+v[3]*v[3])+v[3]))
+    den = sqrt(v[1]*v[1]+v[2]*v[2]+v[3]*v[3])+v[3]
+    # this parametrization has a removable singularity exactly at the south
+    # pole (0,0,-1) (both num and den vanish there); the limit is P1Inf.
+    _is_zero_ish(den) && return P1Point(U(1),U(0))
+    P1Point(U(v[1],v[2]),U(den))
 end
     
 function R3_P1Point(z::P1Point{T}) where T
@@ -111,11 +119,18 @@ function barycentre(z::Vector{P1Point{T}}) where T
 end
 barycentre(z::P1Point,w::P1Point...) = barycentre([z;w...])
 
+# is d indistinguishable from 0 at the precision this field can represent?
+# for ball-arithmetic fields (AcbFieldElem), a tiny ball that merely contains
+# 0 (rather than being the exact literal 0) still counts -- it represents an
+# exact mathematical coincidence blurred by finite precision.
+_is_zero_ish(d::Union{AcbFieldElem,ArbFieldElem}) = contains(d, 0)
+_is_zero_ish(d) = iszero(d)
+
 function Oscar.midpoint(z::P1Point{T},w::P1Point{T}) where T
     z==w && return z
 
     d = w.num*conj(z.num) + w.den*conj(z.den)
-    iszero(d) && error("cannot find midpoint of antipodes")
+    _is_zero_ish(d) && error("cannot find midpoint of antipodes")
     a = sqrt((abs2(z.num)+abs2(z.den))/(abs2(w.num)+abs2(w.den))*abs2(d))
     P1Point{T}(a*w.num+d*z.num,a*w.den+d*z.den)
 end
@@ -123,9 +138,9 @@ end
 """Compute the spherical distance between points z,w. Returns a Float64."""
 function distance(z::P1Point{T},w::P1Point{T}) where T
     z==w && return 0.0
-    
+
     d = w.num*conj(z.num) + w.den*conj(z.den)
-    if iszero(d)
+    if _is_zero_ish(d)
         Float64(pi)
     else
         v = abs((w.num*z.den-w.den*z.num)/d) # image of w under map z↦0
@@ -133,16 +148,91 @@ function distance(z::P1Point{T},w::P1Point{T}) where T
     end
 end
 
-# collected p1 points, gather and cluster
+"""snap a complex value z towards 0, ±1, ±i at relative precision prec."""
+function clean_complex(z, prec)
+    r, i = real(z), imag(z)
+    p = real_field(z)(prec)
+    changed = false
+    if abs(i) < p*abs(r)
+        if !iszero(i); i = zero(i); changed = true; end
+        if abs(r-1) < p && !isone(r); r = one(r); changed = true; end
+        if abs(r+1) < p && r != -one(r); r = -one(r); changed = true; end
+    end
+    if abs(r) < p*abs(i)
+        if !iszero(r); r = zero(r); changed = true; end
+        if abs(i-1) < p && !isone(i); i = one(i); changed = true; end
+        if abs(i+1) < p && i != -one(i); i = -one(i); changed = true; end
+    end
+    changed ? complex_field(r)(r,i) : z
+end
 
-# match p1 points
+"""snap p towards 0, ±1, ∞ or a real/imaginary value, at relative precision prec."""
+function cleaned_p1point(p::P1Point{T}, prec = 1//10^6) where T
+    isinf(p) && return p
+    z = zcoord(p)
+    w = clean_complex(z, prec)
+    n = abs2(w)
+    q = real_field(z)(prec)
+    if n*2*q*q > 1
+        P1Inf(p)
+    elseif n < 2*q*q
+        zero(p)
+    else
+        P1Point(w)
+    end
+end
 
-# closest p1 point
+"""cluster the points which are pairwise within distance ≤ precision
+(clustering is transitive: if a is close to b and b is close to c, a,b,c end
+up in the same cluster even if a,c themselves are far apart), returning one
+(barycentre,count) pair per cluster."""
+function collected_p1_points(points::Vector{P1Point{T}}, precision::Real = 1e-6) where T
+    n = length(points)
+    up = collect(1:n)
+    function find(i)
+        while up[i] != i
+            up[i] = up[up[i]]
+            i = up[i]
+        end
+        i
+    end
+    for i=1:n, j=i+1:n
+        if distance(points[i],points[j]) <= precision
+            ri, rj = find(i), find(j)
+            ri != rj && (up[ri] = rj)
+        end
+    end
+    clusters = Dict{Int,Vector{Int}}()
+    for i=1:n
+        push!(get!(clusters,find(i),Int[]),i)
+    end
+    [(barycentre(points[idxs]), length(idxs)) for idxs=values(clusters)]
+end
+
+"""for each point in ptA, find the index of the closest candidate in the
+corresponding list ptB[i]; return `nothing` if any match is ambiguous (some
+other candidate is not at least `separation` times farther than the closest
+one)."""
+function match_p1_points(ptA::Vector{P1Point{T}}, ptB::Vector{<:Vector{P1Point{T}}}, separation::Real = 2) where T
+    dists = [[distance(ptA[i],v) for v=ptB[i]] for i=1:length(ptA)]
+    perm = [argmin(d) for d=dists]
+    for i=1:length(dists), j=1:length(dists[i])
+        if j != perm[i] && dists[i][j] < dists[i][perm[i]]*separation
+            return nothing
+        end
+    end
+    perm
+end
+
+closest_p1_point(points::Vector{P1Point{T}}, p::P1Point{T}) where T = points[match_p1_points([p],[points])[1]]
 
 function x_ratio(p₁::P1Point{T},p₂::P1Point{T},p₃::P1Point{T},p₄::P1Point{T}) where T
     P1Point{T}((p₁.num*p₃.den-p₃.num*p₁.den) * (p₂.num*p₄.den-p₄.num*p₂.den),
                (p₂.num*p₃.den-p₃.num*p₂.den) * (p₁.num*p₄.den-p₄.num*p₁.den))
 end
+
+"""the (complex, rather than P1-valued) cross ratio of p₁,p₂,p₃,p₄, namely zcoord(x_ratio(...))"""
+cross_ratio(p₁::P1Point,p₂::P1Point,p₃::P1Point,p₄::P1Point) = zcoord(x_ratio(p₁,p₂,p₃,p₄))
 
 function circumcircle(p₁::P1Point{T},p₂::P1Point{T},p₃::P1Point{T}) where T
     F = field(p₁)
@@ -157,13 +247,16 @@ function circumcircle(p₁::P1Point{T},p₂::P1Point{T},p₃::P1Point{T}) where 
     
     centre = P1Point{T}(F(im)*(-qimag+sqrt(abs2(p)+qimag*qimag)),p)
 
-    d = abs(centre.num*p₁.den - p₁.num*centre.den) / abs(conj(centre.num)*p₁.num + p₁.den*conj(centre.den));
-    
+    denom = conj(centre.num)*p₁.num + p₁.den*conj(centre.den)
+    _is_zero_ish(denom) && return (antipode(centre), 0.0) # p₁ is antipodal to centre: radius 0 around antipode(centre)
+
+    d = abs(centre.num*p₁.den - p₁.num*centre.den) / abs(denom)
+
     if d > 1
         d = inv(d)
         centre = antipode(centre)
     end
-    
+
     (centre, 2atan(Float64(d)))
 end    
 
@@ -204,10 +297,29 @@ Base.hash(m::MoebiusP1Map{T},h) where T = hash((m.a,m.b,m.c,m.d),h)
           
 moebius_map(a::T, b::T, c::T, d::T) where T = MoebiusP1Map{T}(a,b,c,d)
 
-function as_rational_p1_map(m::RationalP1Map{T},n::MoebiusP1Map{T}) where T
-    F = function_field(m)
-    R = polynomial_ring(m)
-    F(R([n.b,n.a]))//F(R([n.d,n.d]))
+"""evaluate p(z) "homogeneously" at z = num(z)/den(z), i.e. return
+p(num/den) * den^d as a genuine polynomial (no fractions/gcd involved),
+where d ≥ degree(p). num, den are themselves polynomials (this generalizes
+homogeneous_poly_eval above, which evaluates at a scalar num/den pair)."""
+function homogeneous_poly_compose(p::PolyRingElem{T}, num::PolyRingElem{T}, den::PolyRingElem{T}, d::Int = degree(p)) where T
+    c = coefficients(p)
+    v = c[0]*one(num)
+    inum = one(num)
+    for i=1:d
+        inum *= num
+        v = den*v + inum*c[i]
+    end
+    v
+end
+
+"""compute the numerator and denominator polynomials of m∘g, where m is given
+by (m_num,m_den) and g by (g_num,g_den), all as plain polynomials (m,g rational
+maps of possibly different degrees). This avoids AbstractAlgebra's generic
+`subst`, whose internal Brent-Kung evaluation does fraction arithmetic that is
+broken over interval rings such as AcbFieldElem (see my_quo above)."""
+function compose_rational(m_num::PolyRingElem{T}, m_den::PolyRingElem{T}, g_num::PolyRingElem{T}, g_den::PolyRingElem{T}) where T
+    d = max(degree(m_num), degree(m_den))
+    homogeneous_poly_compose(m_num,g_num,g_den,d), homogeneous_poly_compose(m_den,g_num,g_den,d)
 end
 
 function p1_map(p::Union{AcbPolyRingElem,AbstractAlgebra.Generic.Poly{T}}) where T
@@ -256,8 +368,11 @@ end
 function moebius_map(m::Pair{P1Point{T},P1Point{T}}...) where T
     length(m)==3 || error("Need three source and three range points")
 
-    inv(moebius_map(m[1].first,m[2].first,m[3].first))∘moebius_map(m[1].second,m[2].second,m[3].second)
+    moebius_map(m[1].second,m[2].second,m[3].second)∘inv(moebius_map(m[1].first,m[2].first,m[3].first))
 end
+
+moebius_map(v::Vector{P1Point{T}}) where T = moebius_map(v...)
+moebius_map(src::Vector{P1Point{T}},dst::Vector{P1Point{T}}) where T = moebius_map((src.=>dst)...)
 
 function moebius_path(p::P1Point{T},q::P1Point{T}) where T # Möbius transformation 0↦p, 1↦q, ∞↦antipode(p)
     moebius_map(antipode(p),p,q)
@@ -269,7 +384,63 @@ function moebius_map(m::Union{Matrix{T},MatrixElem{T}}) where T
     moebius_map(m[1,1],m[1,2],m[2,1],m[2,2])
 end
 
+"""build a P1 map from numerator/denominator coefficient vectors, lowest degree first (denom defaults to [1])."""
+function p1_map_by_coefficients(numer::Vector{T}, denom::Vector{T} = [one(numer[1])]) where T
+    r, z = rational_function_field(parent(numer[1]),:z)
+    R = parent(numerator(z))
+    p1_map(my_quo(r, R(numer), R(denom)))
+end
+
+"""coefficients of the numerator and denominator of m, lowest degree first,
+padded with zeros to the same length (degree(m)+1), together with degree(m)"""
+function coefficients_of_p1_map(m::RationalP1Map)
+    d = degree(m)
+    F = coefficient_field(m)
+    cn = collect(coefficients(numerator(m.map)))
+    cd = collect(coefficients(denominator(m.map)))
+    while length(cn) <= d; push!(cn,zero(F)); end
+    while length(cd) <= d; push!(cd,zero(F)); end
+    (cn, cd, d)
+end
+
+"""the P1 map z ↦ z^d (for d<0, the genuine Laurent monomial z^d = 1/z^(-d))"""
+function p1_monomial(F::Field, d::Integer)
+    ad = abs(d)
+    numer, denom = [zero(F) for _=1:ad+1], [zero(F) for _=1:ad+1]
+    if d ≥ 0
+        numer[ad+1], denom[1] = one(F), one(F)
+    else
+        numer[1], denom[ad+1] = one(F), one(F)
+    end
+    p1_map_by_coefficients(numer,denom)
+end
+
+"""the 2×2 matrix [a b;c d] describing the degree-1 map m, such that
+moebius_map(sl2_p1_map(m)) == m"""
+sl2_p1_map(m::MoebiusP1Map) = [m.a m.b; m.c m.d]
+function sl2_p1_map(m::RationalP1Map)
+    degree(m)==1 || error("sl2_p1_map: map must have degree 1")
+    sl2_p1_map(moebius_map(m))
+end
+
+"""snap map's coefficients to 0 below relative precision prec, and clean the
+remaining ones (after normalizing by the first nonzero denominator coefficient)"""
+function cleaned_p1map(m::RationalP1Map, prec = 1//10^6)
+    cn, cd, d = coefficients_of_p1_map(m)
+    nrm = max(maximum(abs2,cn),maximum(abs2,cd))
+    thresh = parent(nrm)(prec)*nrm
+    for i=1:length(cn); abs2(cn[i]) < thresh && (cn[i] = zero(cn[i])); end
+    for i=1:length(cd); abs2(cd[i]) < thresh && (cd[i] = zero(cd[i])); end
+    scale = cd[findfirst(!iszero,cd)]
+    p1_map_by_coefficients([clean_complex(c/scale,prec) for c=cn], [clean_complex(c/scale,prec) for c=cd])
+end
+
 Base.inv(m::MoebiusP1Map{T}) where T = moebius_map(m.d,-m.b,-m.c,m.a)
+Base.conj(m::MoebiusP1Map{T}) where T = moebius_map(conj(m.a),conj(m.b),conj(m.c),conj(m.d))
+
+# scalar multiplication of the map by a constant, i.e. z ↦ k*m(z)
+Base.:*(m::MoebiusP1Map{T}, k) where T = moebius_map(k*m.a, k*m.b, m.c, m.d)
+Base.:*(k, m::MoebiusP1Map{T}) where T = moebius_map(k*m.a, k*m.b, m.c, m.d)
 
 Base.one(m::MoebiusP1Map{T}) where T = (z = zero(m.a); o = one(m.a); moebius_map(o,z,z,o))
 Base.one(::Type{MoebiusP1Map{T}}) where {T <: Complex} = moebius_map(T(1),T(0),T(0),T(1))
@@ -283,16 +454,18 @@ function Base.:∘(m::MoebiusP1Map{T},n::MoebiusP1Map{T}) where T
 end
 
 function Base.:∘(m::RationalP1Map{T},n::MoebiusP1Map{T}) where T
-    rn = as_rational_p1_map(m,n)
-    subst(numerator(m),rn)//subst(denominator(m),rn)
+    R = polynomial_ring(m)
+    cn, cd = compose_rational(numerator(m.map),denominator(m.map),R([n.b,n.a]),R([n.d,n.c]))
+    p1_map(my_quo(function_field(m),cn,cd))
 end
 
 function Base.:∘(m::MoebiusP1Map{T},n::RationalP1Map{T}) where T
-    (m.a*n + m.b) // (m.c*n + m.d)
+    (m.a*n + m.b) / (m.c*n + m.d)
 end
 
 function Base.:∘(m::RationalP1Map{T},n::RationalP1Map{T}) where T
-    my_quo(parent(m.map),subst(numerator(m),rn),subst(denominator(m),rn))
+    cn, cd = compose_rational(numerator(m.map),denominator(m.map),numerator(n.map),denominator(n.map))
+    p1_map(my_quo(function_field(m),cn,cd))
 end
 
 function Base.:^(m::P1Map{T},n::MoebiusP1Map{T}) where T
@@ -535,6 +708,9 @@ function image_df(m::RationalP1Map{T}, p::P1Point{T}) where T
     P1Point{T}(qnum,qden), qdiff
 end
 
+"""the local scaling factor |m'(p)| of m at p, in the spherical metric"""
+p1_map_scaling(m::RationalP1Map, p::P1Point) = abs(image_df(m,p)[2])
+
 Oscar.derivative(m::RationalP1Map{T}, p::P1Point{T}) where T = image_df(m,p)[2]
 
 function p1_map(poles::Vector, zeros::Vector, img::Pair{P1Point{T},P1Point{T}}) where T
@@ -559,31 +735,48 @@ function p1_map(poles::Vector, zeros::Vector, img::Pair{P1Point{T},P1Point{T}}) 
     m * (zcoord(img.second) / zcoord(m(img.first)))
 end
 
+_is_real_zero(x::ArbFieldElem) = contains(x, 0)
+_is_real_zero(x::QQBarFieldElem) = iszero(x)
+_is_real_zero(x::AbstractFloat) = abs(x) < 1e-8
+
 """compute the (t,u) in [0,1]x[0,1] such that γ(t) = f(δ(u)).
-returns a list of (t,u,Im(γ^-1*f*δ)'(u),γ(t),δ(u))
+returns a list of named tuples (t, u, direction, γt, δu), where direction is
+the sign of Im((γ⁻¹∘f∘δ)'(u)).
 γ, δ are Möbius transformations, and f is a rational map.
 """
 function p1_intersect(γ::MoebiusP1Map{T},f::RationalP1Map{T},δ::MoebiusP1Map{T}) where T
-    U = real(T)
     f₁ = inv(γ)∘f∘δ
-    p = imag(numerator(f₁)*conj(denominator(f₁)))
-    
-    intersections = @NamedTuple{t::U,u::U,direction::Int,γt::P1Point{T},δu::P1Point{T}}[]
-    for u=roots(p,isolate_real=true)
-        is_real(r) || continue
-        pu = P1Point(u)
+    numer, denom = numerator(f₁.map), denominator(f₁.map)
+    Fc = coefficient_field(f₁)
+
+    poly = numer * map_coefficients(conj,denom) # poly(u) = numer(u)*conj(denom(u)) for real u
+    # the real roots of ip are exactly the u for which Im(f₁(u)) = 0
+    ip = parent(poly)(Fc.(imag.(collect(coefficients(poly)))))
+
+    Ur = real_field(zero(Fc))
+    eps = Ur(1//10^8)
+
+    intersections = NamedTuple[]
+    for u=roots(ip)
+        _is_real_zero(imag(u)) || continue
+        ur = real(u)
+        (ur < -eps || ur > 1+eps) && continue
+
+        pu = P1Point(Fc(ur))
         z = f₁(pu)
         isinf(z) && continue
-        t = real(coord(z))
-        0 ∈ imag(coord(z)) || continue
-        0 ≤ t ≤ 1 || continue #!!! interval arithmetic test
-        slope = homogeneous_dpoly_eval(poly,u.num,u.den,2degree(f))
-        slopei = imag(slope)
-        direction = (0 ∈ slopei ? 0 : (slopei > 0 ? 1 : -1))
-        push!(intersections, (t = t, u, direction, γt = γ(z), δu = δ(pu)))
+        zc = zcoord(z)
+        (imag(zc) < -Ur(1) || imag(zc) > Ur(1)) && continue # avoid blown-up evaluations near poles
+        t = real(zc)
+        (t < -eps || t > 1+eps) && continue
+
+        slope = imag(derivative(poly)(u))
+        direction = slope > 0 ? 1 : (slope < 0 ? -1 : 0)
+
+        push!(intersections, (t = t, u = ur, direction = direction, γt = γ(z), δu = δ(pu)))
     end
     intersections
-end    
+end
 
 """find a Möbius transformation that sends the last of points to P1Inf, and either
 - matches points and extra as well as possible, if oldpoints is a list;
@@ -591,22 +784,27 @@ end
 function rotating_moebius_map(points::Vector{P1Point{T}}, oldpoints = nothing) where T
     m = inv(moebius_map(points[end])) # sends points[end] to ∞
 
-    if extra≠nothing
+    if oldpoints≠nothing
         @assert length(points) == length(oldpoints)
-        @assert oldpoints[end] ≎ P1Inf(oldpoints[end])
+        @assert proj_equiv(oldpoints[end], P1Inf(oldpoints[end]))
         points = m.(points)
         n = length(points)
 
         theta = zero(field(points[end]))
-        norm = theta
+        norm = zero(real_field(points[end]))
         for i=1:n
             proj = xycoord(points[i])
             oldproj = xycoord(oldpoints[i])
             theta += conj(proj)*oldproj
             norm += abs2(proj)
         end
-        if 0∈norm || abs2(theta) < 0.7norm
+        if iszero(norm)
             theta = zero(theta)
+        else
+            theta /= norm
+            if abs2(theta) < real_field(points[end])(7//10)
+                theta = zero(theta)
+            end
         end
 
         if theta == 0
@@ -674,29 +872,32 @@ More precisely, let t=|x|. in R^3, the transformation sends
      P to (2(1-t)P+(2-t+(v*P))v)/(1+(1-t)^2+(2-t)(v*P)).
 In particular, for t=0 it sends everything to v, and for t=1 it fixes P.
 """
-function __solve_barycenter(x, p::Vector{NTuple{3,T}}) where T
+function __solve_barycenter(x, p::Vector{NTuple{3,Float64}})
     t = sqrt(sum(x.*x))
     n = length(p)
-    
-    sum = zero(x)
+
+    acc = zero(x)
     for i=1:n
         z = sum(p[i].*x)
         d = 1 + (1-t)*(1-t) + (2-t)*z
 
         for j=1:3
-            sum[j] += (2(1-t)*p[i][j] + (2-t+z)*x[j]) / d
+            acc[j] += (2(1-t)*p[i][j] + (2-t+z)*x[j]) / d
         end
     end
-    sum ./ n
+    acc ./ n
 end
 
-
+# the barycenter-finding iteration is only meaningful numerically (as in GAP,
+# which always converts to IEEE754 floats before calling its compiled
+# FIND_BARYCENTER routine); we do the same here, regardless of the field T
+# the P1 points were defined over.
 function __find_barycenter(r3points::Vector{NTuple{3,T}}) where T
-    x0 = zeros(T,3)
-    problem = NonlinearSolve.NonlinearProblem(__solve_barycenter,x0,r3points)
-    sol = NonlinearSolve.NonlinearSolve(problem)
-
-    @info sol
+    fpoints = [Float64.(p) for p=r3points]
+    x0 = fill(1e-6,3) # avoid the singular Jacobian of __solve_barycenter at x=0
+    problem = NonlinearSolve.NonlinearProblem(__solve_barycenter,x0,fpoints)
+    sol = NonlinearSolve.solve(problem)
+    sol.retcode == NonlinearSolve.ReturnCode.Success || @warn "FIND_BARYCENTER did not converge" sol.retcode
 
     sol.u
 end
@@ -706,10 +907,19 @@ the barycenter to 0, and makes the new points as close as possible
 to oldpoints by a rotation fixing 0-∞.
 oldpoints is allowed to be 'nothing', in which case we just return a good Möbius transformation.
 """
+# convert a Float64 (as returned by the numeric __find_barycenter solve) into
+# a element of F, falling back to an exact-rational route for fields (like
+# QQBarField) that don't accept a Float64 argument directly.
+_field_from_float(F,x::Float64) = try
+    F(x)
+catch
+    F(Rational{BigInt}(x))
+end
+
 function normalizing_moebius_map(points, oldpoints = nothing)
     n = length(points)
     F = field(points[1])
-    
+
     if n==2
         return inv(moebius_map(points[1],points[2]))
     elseif n==3
@@ -717,19 +927,20 @@ function normalizing_moebius_map(points, oldpoints = nothing)
         return moebius_map(points[1]=>P1Point(r3),points[2]=>P1Point(-r3),points[3]=>P1Inf(points[3]))
     end
 
-    barycenter = __find_barycenter(R3_P1Point.(points))
-    dilate = sqrt(barycenter.*barycenter)
+    Fr = real_field(points[1])
+    barycenter = [_field_from_float(Fr,x) for x=__find_barycenter(R3_P1Point.(points))]
+    dilate = sqrt(sum(barycenter.^2))
     if iszero(dilate)
         map = identity_map(points[1])
     else
-        map = inv(moebius_map(P1Point_R3(-barycenter/dilate)))*(1-dilate)
+        map = inv(moebius_map(P1Point_R3(Tuple(-barycenter./dilate)))) * (1-dilate)
     end
-    
+
     if oldpoints==nothing
-        rotating_moebius_map(map(points[end]))∘map
+        rotating_moebius_map([map(points[end])])∘map
     else
         newpoints = map.(points)
-        rotating_mobius_map(newpoints,oldpoints)∘map
+        rotating_moebius_map(newpoints,oldpoints)∘map
     end
 end
 
