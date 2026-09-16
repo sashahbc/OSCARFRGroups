@@ -13,7 +13,7 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
 julia = "1.10.10"
-GAP = "0.13.4"
+GAP = "0.13.4, 0.17"
 NonlinearSolve = "4.9.0"
 Oscar = "1.4.0"
 StaticArrays = "1.9.13"
