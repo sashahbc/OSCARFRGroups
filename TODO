@@ -1,6 +1,10 @@
-1) triangulations. make them robust, with incircle tests and refinement
+1) [done] triangulations. make them robust, with incircle tests and refinement
 
-2) sphere groups, possibly with orbifold
+2) [done] sphere groups, possibly with orbifold -- wraps GAP's own SphereGroup
+   (see src/sphere.jl for why: Knuth-Bendix normal forms, intersection
+   numbers, and automorphism-group computation are deep enough that
+   reimplementing them natively isn't worthwhile; requires the "img" GAP
+   package to be loadable, see src/sphere.jl header for setup)
 
 3) marked triangulations
 
