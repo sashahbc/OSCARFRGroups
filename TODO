@@ -6,7 +6,12 @@
    reimplementing them natively isn't worthwhile; requires the "img" GAP
    package to be loadable, see src/sphere.jl header for setup)
 
-3) marked triangulations
+3) [done, infrastructure layer only] marked triangulations -- src/markedsphere.jl
+   has NewMarkedSphere/WiggledMarkedSphere/VerticesOfMarkedSphere/
+   SpanningTreeBoundary. Still deferred: the branched-covering machinery
+   (SphereMachineOfBranchedCovering, the LIFTARC@/LIFTEDGE@ path-lifting
+   algorithm, MonodromyOfP1Map, SphereMachine, DistanceMarkedSpheres),
+   which needs gap/machine.gi (2600 lines, FR-machine core, untouched).
 
 4) rational maps, recorded by critical points and values (rather than coefficients), and normalization. (in degree 1, misses 3 params; in degree 2, misses 1 param. in degree >=3, probably ok).
 - conversion to classical format

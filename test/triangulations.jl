@@ -75,8 +75,13 @@ end
   fix_delaunay!(t)
   @test check_triangulation(t) === true
 
-  # wiggled_triangulation via a Möbius map, and a bare shallow_copy
-  m = moebius_map(pos(vertices(t)[1]), pos(vertices(t)[2]))
+  # wiggled_triangulation via a Möbius map, and a bare shallow_copy. A
+  # gentle perturbation, not one sending a vertex to infinity: that extreme
+  # a wiggle can blow a face up past a hemisphere and break the
+  # "barycentre is inside its own face" assumption behind
+  # check_triangulation's Locate check -- a genuine geometric effect, not a
+  # bug, but not what this test is for.
+  m = moebius_map(field(1), field(1//10), field(-1//10), field(1))
   t2 = wiggled_triangulation(t, m)
   @test check_triangulation(t2) === true
   @test length(vertices(t2)) == length(vertices(t)) &&
