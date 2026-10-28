@@ -22,21 +22,31 @@
 # img.so, is NOT required for sphere groups -- only for the P1-point
 # machinery elsewhere in that package).
 
-export SphereGroup, sphere_group, SphereGroupElem, SphereConjClass
-export sphere_rank, sphere_ordering, sphere_exponents
+export SphereConjClass
+export SphereGroup
+export SphereGroupElem
+export amalgamated_free_product
+export as_sphere_group
+export embeddings_of_amalgamated_free_product
+export epimorphism_to_out
+export intersection_number
+export is_peripheral
 export isomorphism_free_group
-export as_sphere_group, isomorphism_sphere_group
-export peripheral_classes, is_peripheral
-export intersection_number, self_intersection_number
-export sphere_automorphism_group, epimorphism_to_out
-export amalgamated_free_product, embeddings_of_amalgamated_free_product
+export isomorphism_sphere_group
+export peripheral_classes
+export self_intersection_number
+export sphere_automorphism_group
+export sphere_exponents
+export sphere_group
+export sphere_ordering
+export sphere_rank
 
 @attributes mutable struct SphereGroup <: Oscar.GAPGroup
-    X::GapObj
-    function SphereGroup(G::GapObj)
-        @assert GAP.Globals.IsSphereGroup(G)
-        return new(G)
-    end
+  X::GapObj
+  function SphereGroup(G::GapObj)
+    @assert GAP.Globals.IsSphereGroup(G)
+    return new(G)
+  end
 end
 
 const SphereGroupElem = Oscar.BasicGAPGroupElem{SphereGroup}
@@ -54,10 +64,21 @@ is isomorphic to a free group of rank `n-1`, see [`isomorphism_free_group`](@ref
 
 `ordering` may be a single integer `n`, meaning the ordering `[n,n-1,...,1]`.
 """
-function sphere_group(ordering::Union{Integer,AbstractVector{<:Integer}}, exponents::Union{Nothing,AbstractVector{<:Integer}} = nothing)
-    o = ordering isa Integer ? GAP.Obj(Int(ordering)) : GapObj(Int.(collect(ordering)); recursive=true)
-    G = exponents === nothing ? GAP.Globals.SphereGroup(o) : GAP.Globals.SphereGroup(o, GapObj(Int.(collect(exponents)); recursive=true))
-    SphereGroup(G)
+function sphere_group(
+  ordering::Union{Integer,AbstractVector{<:Integer}},
+  exponents::Union{Nothing,AbstractVector{<:Integer}}=nothing,
+)
+  o = if ordering isa Integer
+    GAP.Obj(Int(ordering))
+  else
+    GapObj(Int.(collect(ordering)); recursive=true)
+  end
+  G = if exponents === nothing
+    GAP.Globals.SphereGroup(o)
+  else
+    GAP.Globals.SphereGroup(o, GapObj(Int.(collect(exponents)); recursive=true))
+  end
+  SphereGroup(G)
 end
 
 Base.show(io::IO, g::SphereGroup) = print(io, String(GAP.Globals.ViewString(GapObj(g))))
@@ -69,11 +90,13 @@ sphere_rank(g::SphereGroup) = Int(GAP.Globals.RankOfSphereGroup(GapObj(g)))
 sphere_ordering(g::SphereGroup) = Vector{Int}(GAP.Globals.OrderingOfSphereGroup(GapObj(g)))
 
 """the exponents of the generators of g (0 meaning infinite order)."""
-sphere_exponents(g::SphereGroup) = Vector{Int}(GAP.Globals.ExponentsOfSphereGroup(GapObj(g)))
+sphere_exponents(g::SphereGroup) =
+  Vector{Int}(GAP.Globals.ExponentsOfSphereGroup(GapObj(g)))
 
 """the Euler characteristic of g (a free group, or a sphere group). g is
 finite iff this is positive, and virtually abelian iff this is 0."""
-Oscar.euler_characteristic(g::Oscar.GAPGroup) = Rational{Int}(GAP.Globals.EulerCharacteristic(GapObj(g)))
+Oscar.euler_characteristic(g::Oscar.GAPGroup) =
+  Rational{Int}(GAP.Globals.EulerCharacteristic(GapObj(g)))
 
 """if g has all exponents infinite, an isomorphism (as a raw GAP group
 homomorphism) from g to a free group of rank sphere_rank(g)-1."""
@@ -83,17 +106,17 @@ isomorphism_free_group(g::SphereGroup) = GAP.Globals.IsomorphismFreeGroup(GapObj
 permutation of all the generators, the "ordering" relator, and otherwise
 only power relators) into a sphere group; returns `nothing` if it can't."""
 function as_sphere_group(G::Oscar.GAPGroup)
-    newG = GAP.Globals.AsSphereGroup(GapObj(G))
-    newG == GAP.Globals.fail && return nothing
-    SphereGroup(newG)
+  newG = GAP.Globals.AsSphereGroup(GapObj(G))
+  newG == GAP.Globals.fail && return nothing
+  SphereGroup(newG)
 end
 
 """an isomorphism (as a raw GAP group homomorphism) from the f.p. group G to
 a sphere group, or `nothing` if G is not (as given) a sphere group."""
 function isomorphism_sphere_group(G::Oscar.GAPGroup)
-    iso = GAP.Globals.IsomorphismSphereGroup(GapObj(G))
-    iso == GAP.Globals.fail && return nothing
-    iso
+  iso = GAP.Globals.IsomorphismSphereGroup(GapObj(G))
+  iso == GAP.Globals.fail && return nothing
+  iso
 end
 
 ################################################################
@@ -101,7 +124,7 @@ end
 ################################################################
 
 """the peripheral conjugacy classes of g, i.e. the conjugacy classes of its generators."""
-peripheral_classes(g::SphereGroup) = [conjugacy_class(g,x) for x=gens(g)]
+peripheral_classes(g::SphereGroup) = [conjugacy_class(g, x) for x in gens(g)]
 
 """whether x represents a peripheral (boundary) loop, i.e. is conjugate to a
 power of a single generator."""
@@ -111,11 +134,13 @@ is_peripheral(c::SphereConjClass) = Bool(GAP.Globals.IsPeripheral(GapObj(c)))
 """the geometric intersection number of the (multi)curves represented by the
 conjugacy classes c,d: the minimal number of intersections they may have,
 following Cohen-Lustig."""
-intersection_number(c::SphereConjClass, d::SphereConjClass) = Int(GAP.Globals.IntersectionNumber(GapObj(c), GapObj(d)))
+intersection_number(c::SphereConjClass, d::SphereConjClass) =
+  Int(GAP.Globals.IntersectionNumber(GapObj(c), GapObj(d)))
 
 """the self-intersection number of the curve represented by c, i.e. its
 intersection number with a small translate of itself."""
-self_intersection_number(c::SphereConjClass) = Int(GAP.Globals.SelfIntersectionNumber(GapObj(c)))
+self_intersection_number(c::SphereConjClass) =
+  Int(GAP.Globals.SelfIntersectionNumber(GapObj(c)))
 
 ################################################################
 # automorphism groups, amalgamated free products
@@ -132,11 +157,16 @@ epimorphism_to_out(a::GapObj) = GAP.Globals.EpimorphismToOut(a)
 
 """the amalgamated free product of the sphere groups g and h, along the
 cyclic subgroups generated by x∈g and y∈h."""
-function amalgamated_free_product(g::SphereGroup, h::SphereGroup, x::SphereGroupElem, y::SphereGroupElem)
-    SphereGroup(GAP.Globals.AmalgamatedFreeProduct(GapObj(g), GapObj(h), GapObj(x), GapObj(y)))
+function amalgamated_free_product(
+  g::SphereGroup, h::SphereGroup, x::SphereGroupElem, y::SphereGroupElem
+)
+  SphereGroup(
+    GAP.Globals.AmalgamatedFreeProduct(GapObj(g), GapObj(h), GapObj(x), GapObj(y))
+  )
 end
 
 """the two embeddings (as raw GAP group homomorphisms) of the original
 factors g,h into amal = amalgamated_free_product(g,h,x,y). Must be called
 on amal itself, not on g or h."""
-embeddings_of_amalgamated_free_product(amal::SphereGroup) = Vector{GapObj}(GAP.Globals.EmbeddingsOfAmalgamatedFreeProduct(GapObj(amal)))
+embeddings_of_amalgamated_free_product(amal::SphereGroup) =
+  Vector{GapObj}(GAP.Globals.EmbeddingsOfAmalgamatedFreeProduct(GapObj(amal)))
